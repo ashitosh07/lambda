@@ -16,16 +16,39 @@ namespace Tangonet_Pirani_Transaction_Consumer
 {
     public partial class Function
     {
+       
         private readonly IAmazonDynamoDB _dynamoDBClient;
         private readonly string _tableName;
+        private readonly string _apiKey;
+        private readonly string _apiValue;
+        private readonly string _postEndpoint;
+        private readonly string _putEndpoint;
 
         public Function()
         {
             _dynamoDBClient = new AmazonDynamoDBClient();
-            _tableName = "aml-transaction-data-capture-audits";
+            _tableName = GetConfigValue("DynamoDBTableName");
+            _apiKey = GetConfigValue("APIKey");
+            _apiValue = GetConfigValue("APIValue");
+            _postEndpoint = GetConfigValue("PostEndpoint");
+            _putEndpoint = GetConfigValue("PutEndpoint");
         }
 
-        private async Task FunctionHandler(KinesisEvent kinesisEvent, ILambdaContext context)
+        private string GetConfigValue(string key)
+        {
+            try
+            {
+                // Load aws-lambda-tools-defaults.json file
+                var jsonConfig = JObject.Parse(File.ReadAllText("aws-lambda-tools-defaults.json"));
+                return jsonConfig["Values"][key]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading configuration value for {key}: {ex.Message}");
+                return null;
+            }
+        }
+        public async Task FunctionHandler(KinesisEvent kinesisEvent, ILambdaContext context)
         {
             if (kinesisEvent == null || kinesisEvent.Records == null)
             {
@@ -47,25 +70,19 @@ namespace Tangonet_Pirani_Transaction_Consumer
                 try
                 {
                     var jsonObject = JObject.Parse(data);
-                    var operationType = jsonObject["events"][0]["event"]["operationType"];
+                    var operationType = jsonObject["events"][0]["event"]["operationType"].ToString();
 
-                    if (operationType.ToString() == "insert" || operationType.ToString() == "update")
+                    if (operationType == "insert" || operationType == "update")
                     {
-                        var (id, userId, senderCity, senderCountry, transactionDate) = ExtractTransactionData(jsonObject);
+                        var transactionInfo = ExtractTransactionData(jsonObject);
+                        var commonData = ProcessInsertOperation(transactionInfo, jsonObject, context);
 
-                        var commonData = ProcessInsertOperation(id, userId, senderCity, senderCountry, transactionDate, context);
-
-                        if (operationType.ToString() == "insert")
-                        {
+                        if (operationType == "insert")
                             await PushDataToPirani(commonData, context);
-                        }
-                        else if (operationType.ToString() == "update")
-                        {
+                        else if (operationType == "update")
                             await PutDataToPirani(commonData, context);
-                        }
 
-                        // Pass the TransactionInfo object to ProcessAndSaveToDynamoDB
-                        await ProcessAndSaveToDynamoDB(record.Kinesis.PartitionKey, commonData, id, userId, context);
+                        await ProcessAndSaveToDynamoDB(record.Kinesis.PartitionKey, commonData, transactionInfo.Id, transactionInfo.UserId, context);
                     }
                 }
                 catch (Exception ex)
@@ -73,6 +90,59 @@ namespace Tangonet_Pirani_Transaction_Consumer
                     context.Logger.LogLine($"Error processing record: {ex.Message}");
                 }
             }
+        }
+
+        private TransactionInfo ExtractTransactionData(JObject jsonObject)
+        {
+            var fullDocument = jsonObject["events"][0]["event"]["fullDocument"];
+            var id = fullDocument["_id"].ToString();
+            var userId = fullDocument["userId"].ToString();
+            var transactionDate = DateTime.ParseExact(fullDocument["transactionDate"].ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+
+            return new TransactionInfo
+            {
+                Id = id,
+                UserId = userId,
+                TransactionDate = transactionDate
+            };
+        }
+
+        private string ProcessInsertOperation(TransactionInfo transactionInfo, JObject jsonObject, ILambdaContext context)
+        {
+            var fullDocument = jsonObject["events"][0]["event"]["fullDocument"];
+            var sendInfo = fullDocument["details"]["sendInfo"];
+            var sendAmounts = sendInfo["sendAmounts"];
+            var receiveInfo = fullDocument["details"]["receiveInfo"];
+            var receiveAmounts = receiveInfo["receiveAmounts"];
+
+            var commonData = new
+            {
+                TransactionCode = Guid.NewGuid().ToString(),
+                ProductNumber = "21",
+                TransactionDate = transactionInfo.TransactionDate,
+                DistributionOrReceptionChannel = "ATM",
+                BranchOffice = "Center",
+                City = sendInfo["senderCity"]?.ToString() ?? "Default",
+                Country = sendInfo["senderCountry"]?.ToString() ?? "Default",
+                OperationValue = sendAmounts["totalAmountToCollect"]?.ToString() ?? "Default",
+                Nature = "1",
+                CurrencyType = "Dollar",
+                TransactionType = fullDocument["transactionType"]?.ToString() ?? "Default",
+                TransactionFee = sendAmounts["totalSendFees"]?.ToString() ?? "Default",
+                TerminalId = fullDocument["machineId"]?.ToString() ?? "Default",
+                PartnerId = fullDocument["partnerId"]?.ToString() ?? "Default",
+                TransactionStatus = fullDocument["transactionStatus"]?.ToString() ?? "SUCCESS",
+                SenderCurrency = sendAmounts["sendCurrency"]?.ToString() ?? "Default",
+                SenderFees = sendAmounts["totalSendFees"]?.ToString() ?? "Default",
+                DeliveryOption = receiveInfo["deliveryOption"]?.ToString() ?? "Default",
+                ReceiverFirstName = receiveInfo["receiverFirstName"]?.ToString() ?? "Default",
+                ReceiverLastName = receiveInfo["receiverLastName"]?.ToString() ?? "Default",
+                ReceiveAmount = receiveAmounts["receiveAmount"]?.ToString() ?? "Default",
+                ReceiveCurrency = receiveAmounts["receiveCurrency"]?.ToString() ?? "Default",
+                DeliveryCountry = receiveInfo["destinationCountry"]?.ToString() ?? "Default",
+            };
+
+            return JsonSerializer.Serialize(commonData);
         }
 
         private async Task ProcessAndSaveToDynamoDB(string partitionKey, string commonData, string id, string userId, ILambdaContext context)
@@ -90,45 +160,6 @@ namespace Tangonet_Pirani_Transaction_Consumer
             }
         }
 
-        private (string, string, string, string, DateTime) ExtractTransactionData(JObject jsonObject)
-        {
-            var fullDocument = jsonObject["events"][0]["event"]["fullDocument"];
-            var id = fullDocument["_id"].ToString();
-            var userId = fullDocument["userId"].ToString();
-            var senderInfo = fullDocument["details"]["sendInfo"];
-            var senderCity = senderInfo["senderCity"].ToString();
-            var senderCountry = senderInfo["senderCountry"].ToString();
-            var transactionDate = DateTime.ParseExact(fullDocument["transactionDate"].ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture);
-            return (id, userId, senderCity, senderCountry, transactionDate);
-        }
-
-        private string ProcessInsertOperation(string id, string userId, string senderCity, string senderCountry, DateTime transactionDate, ILambdaContext context)
-        {
-            var transactionInfo = new TransactionInfo
-            {
-                TransactionCode = Guid.NewGuid().ToString(),
-                ProductNumber = "Prod-" + id,
-                TransactionDate = transactionDate,
-                DistributionOrReceptionChannel = "default",
-                BranchOffice = "default",
-                City = senderCity,
-                Country = senderCountry,
-                Nature = "1",
-                OperationValue = 0,
-                CashValue = 0,
-                CheckValue = 0,
-                ElectronicChannelValue = 1,
-                CurrencyType = "default",
-            };
-
-            var jsonSerializerOptions = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase // Ensures camelCase property names in JSON
-            };
-
-            return JsonSerializer.Serialize(transactionInfo, jsonSerializerOptions);
-        }
-
         private async Task SaveToDynamoDB(string partitionKey, TransactionInfo transactionInfo, string id, string userId, ILambdaContext context)
         {
             // Validation
@@ -143,30 +174,18 @@ namespace Tangonet_Pirani_Transaction_Consumer
                 var table = Table.LoadTable(_dynamoDBClient, _tableName);
                 var document = new Document();
                 document["PartitionKey"] = partitionKey;
-
-                // Log and store specific fields
-                context.Logger.LogLine($"TransactionCode: {transactionInfo.TransactionCode}");
-                document["TransactionCode"] = transactionInfo.TransactionCode;
-
-                // Store additional fields
-                document["ProductNumber"] = transactionInfo.ProductNumber;
-                document["TransactionDate"] = transactionInfo.TransactionDate.ToString("yyyy-MM-ddTHH:mm:ss");
-                document["DistributionOrReceptionChannel"] = transactionInfo.DistributionOrReceptionChannel;
-                document["BranchOffice"] = transactionInfo.BranchOffice;
-                document["City"] = transactionInfo.City;
-                document["Country"] = transactionInfo.Country;
-                document["Nature"] = transactionInfo.Nature;
-                document["OperationValue"] = transactionInfo.OperationValue;
-                document["CashValue"] = transactionInfo.CashValue;
-                document["CheckValue"] = transactionInfo.CheckValue;
-                document["ElectronicChannelValue"] = transactionInfo.ElectronicChannelValue;
-                document["CurrencyType"] = transactionInfo.CurrencyType;
-
-
-                // Store Id and UserId
                 document["id"] = id;
                 document["user_id"] = userId;
 
+              
+                foreach (var property in typeof(TransactionInfo).GetProperties())
+                {
+                    if (property.Name != "Id" && property.Name != "UserId")
+                    {
+                        var value = property.GetValue(transactionInfo);
+                        document[property.Name] = value?.ToString() ?? "Default";
+                    }
+                }
                 await table.PutItemAsync(document);
             }
             catch (Exception ex)
@@ -174,19 +193,16 @@ namespace Tangonet_Pirani_Transaction_Consumer
                 context.Logger.LogLine($"Error saving item to DynamoDB: {ex.Message}");
             }
         }
-
-
-
         private async Task PushDataToPirani(string data, ILambdaContext context)
         {
             try
             {
                 using (var httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.Add("x-api-key", "PN.L6t5wbN6Mtj7.Z2n-5NzS2GkGqG9qwmKllwd-IC01u7kQRb5Flb_xAP9Nlwbl");
+                    httpClient.DefaultRequestHeaders.Add(_apiKey, _apiValue);
                     context.Logger.LogLine($"Data Response: {data}");
                     var content = new StringContent(data, Encoding.UTF8, "application/json");
-                    var response = await httpClient.PostAsync("https://c2mwgtg0k0.execute-api.us-east-1.amazonaws.com/pirani-aml-stage/aml-api/entity/transactions", content);
+                    var response = await httpClient.PostAsync(_postEndpoint, content);
                     response.EnsureSuccessStatusCode();
                     var responseContent = await response.Content.ReadAsStringAsync();
                     context.Logger.LogLine($"API Response: {responseContent}");
@@ -204,9 +220,9 @@ namespace Tangonet_Pirani_Transaction_Consumer
             {
                 using (var httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.Add("x-api-key", "PN.L6t5wbN6Mtj7.Z2n-5NzS2GkGqG9qwmKllwd-IC01u7kQRb5Flb_xAP9Nlwbl");
+                    httpClient.DefaultRequestHeaders.Add(_apiKey, _apiValue);
                     var content = new StringContent(data, Encoding.UTF8, "application/json");
-                    var response = await httpClient.PutAsync("https://c2mwgtg0k0.execute-api.us-east-1.amazonaws.com/pirani-aml-stage/aml-api/entity/transactions", content);
+                    var response = await httpClient.PutAsync(_putEndpoint, content);
                     response.EnsureSuccessStatusCode();
                     var responseContent = await response.Content.ReadAsStringAsync();
                     context.Logger.LogLine($"API Response: {responseContent}");

@@ -17,11 +17,34 @@ namespace Tangonet_Pirani_User_Consumer
     {
         private readonly IAmazonDynamoDB _dynamoDBClient;
         private readonly string _tableName;
+        private readonly string _apiKey;
+        private readonly string _apiValue;
+        private readonly string _postEndpoint;
+        private readonly string _putEndpoint;
 
         public Function()
         {
             _dynamoDBClient = new AmazonDynamoDBClient();
-            _tableName = "aml-user-data-capture-audits";
+            _tableName = GetConfigValue("DynamoDBTableName");
+            _apiKey = GetConfigValue("APIKey");
+            _apiValue = GetConfigValue("APIValue");
+            _postEndpoint = GetConfigValue("PostEndpoint");
+            _putEndpoint = GetConfigValue("PutEndpoint");
+        }
+
+        private string GetConfigValue(string key)
+        {
+            try
+            {
+
+                var jsonConfig = JObject.Parse(File.ReadAllText("aws-lambda-tools-defaults.json"));
+                return jsonConfig["Values"][key]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading configuration value for {key}: {ex.Message}");
+                return null;
+            }
         }
 
         public async Task FunctionHandler(KinesisEvent kinesisEvent, ILambdaContext context)
@@ -80,58 +103,39 @@ namespace Tangonet_Pirani_User_Consumer
         {
             var fullDocument = jsonObject["events"][0]["event"]["fullDocument"];
             var procD = fullDocument["procDate"];
-
             var onfidoResult = fullDocument["onfidoResult"];
             var output = onfidoResult["output"];
+            var operationType = jsonObject["events"][0]["event"]["operationType"];
+            var id = fullDocument["_id"];
+            var documentInfo = fullDocument["documentInfo"];
+            var address = fullDocument["address"];
+            var regDate = fullDocument["regDate"];
+            var updDate = fullDocument["updDate"];
 
             // Map JSON data to C# model
             var identification = new ClientInfo
             {
-                identificationType = output["document_type"]?.ToString() ?? "default",
-                identificationNumber = output["document_number"]?.ToString() ?? "default",
-                personType = output["personType"]?.ToString() ?? "1",
-                firstName = output["first_name"]?.ToString() ?? "default",
-                firstLastName = output["last_name"]?.ToString() ?? "default",
-                bomCountry = output["bomCountry"]?.ToString() ?? "default",
-                bomCity = output["bomCity"]?.ToString() ?? "default",
-                sex = output["sex"]?.ToString() ?? "2",
-                economicActivity = output["economicActivity"]?.ToString() ?? "default",
-                registrationDate = ((DateTime)procD["$date"]).ToString("yyyy-MM-ddTHH:mm:ss"),
-                state = output["state"]?.ToString() ?? "1",
-                businessName = output["businessName"]?.ToString() ?? "default",
-                updateAt = ((DateTime)onfidoResult["updatedDate"]).ToString("yyyy-MM-ddTHH:mm:ss"),
+                identificationType = documentInfo["documentType"]?.ToString() ?? "Driving Licence",
+                identificationNumber = documentInfo["documentNo"]?.ToString() ?? "Default",
+                personType = fullDocument["personType"]?.ToString() == "Natural" ? "1" : "2" ?? "Default",
+                firstName = fullDocument["firstName"]?.ToString() ?? "Default",
+                firstLastName = fullDocument["lastName"]?.ToString() ?? "Default",
+                businessName = fullDocument["firstName"]?.ToString() + fullDocument["lastName"]?.ToString() ?? "Default",
+                constitutionDate = DateTime.Parse(DateTime.Now.ToString()).ToString("yyyy-MM-ddTHH:mm:ss"),
+                economicActivity = fullDocument["economicActivity"]?.ToString() ?? "Independant",
+                registrationDate = DateTime.Parse(regDate["$date"].ToString()).ToString("yyyy-MM-ddTHH:mm:ss"),
+                updateAt = DateTime.Parse(regDate["$date"].ToString()).ToString("yyyy-MM-ddTHH:mm:ss"),
+                state = address["state"]?.ToString() == "Active" ? "Active" : "Inactive",
+                city = address["city"]?.ToString() ?? "Default",
+                country = address["country"]?.ToString() ?? "Default",
+                fullAddress = address["fullAddress"]?.ToString() ?? "Default",
+                postalCode = fullDocument["postalCode"]?.ToString() ?? "Default",
+                phone = fullDocument["homePhone"]?.ToString() ?? "Default",
+                email = fullDocument["email"]?.ToString() ?? "Default",
             };
 
             // Serialize the object to JSON
             return JsonSerializer.Serialize(identification);
-        }
-
-        private async Task PushDataToPirani(string data, ILambdaContext context)
-        {
-            try
-            {
-                using (var httpClient = new HttpClient())
-                {
-                    httpClient.DefaultRequestHeaders.Add("x-api-key", "PN.L6t5wbN6Mtj7.Z2n-5NzS2GkGqG9qwmKllwd-IC01u7kQRb5Flb_xAP9Nlwbl");
-
-                    var content = new StringContent(data, Encoding.UTF8, "application/json");
-
-                    var response = await httpClient.PostAsync("https://c2mwgtg0k0.execute-api.us-east-1.amazonaws.com/pirani-aml-stage/aml-api/entity/clients", content);
-
-                    response.EnsureSuccessStatusCode();
-                    var responseContent = await response.Content.ReadAsStringAsync();
-
-                    // Log message using context object
-                    context.Logger.LogLine($"API Response: {responseContent}");
-                    Console.WriteLine("API Response: " + responseContent);
-                }
-            }
-            catch (Exception ex)
-            {
-                // Log error using context object
-                context.Logger.LogLine("Error posting data to endpoint: " + ex.Message);
-                Console.WriteLine("Error posting data to endpoint: " + ex.Message);
-            }
         }
 
         private async Task SaveToDynamoDB(string partitionKey, JObject document)
@@ -157,17 +161,47 @@ namespace Tangonet_Pirani_User_Consumer
             }
         }
 
+        private async Task PushDataToPirani(string data, ILambdaContext context)
+        {
+            try
+            {
+                using (var httpClient = new HttpClient())
+                {
+                    httpClient.DefaultRequestHeaders.Add(_apiKey, _apiValue);
+
+                    var content = new StringContent(data, Encoding.UTF8, "application/json");
+
+                    var response = await httpClient.PostAsync(_postEndpoint, content);
+
+                    response.EnsureSuccessStatusCode();
+                    var responseContent = await response.Content.ReadAsStringAsync();
+
+                    // Log message using context object
+                    context.Logger.LogLine($"API Response: {responseContent}");
+                    Console.WriteLine("API Response: " + responseContent);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log error using context object
+                context.Logger.LogLine("Error posting data to endpoint: " + ex.Message);
+                Console.WriteLine("Error posting data to endpoint: " + ex.Message);
+            }
+        }
+
+      
+
         private async Task PutDataToPirani(string data, ILambdaContext context)
         {
             try
             {
                 using (var httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.Add("x-api-key", "PN.L6t5wbN6Mtj7.Z2n-5NzS2GkGqG9qwmKllwd-IC01u7kQRb5Flb_xAP9Nlwbl");
+                    httpClient.DefaultRequestHeaders.Add(_apiKey, _apiValue);
 
                     var content = new StringContent(data, Encoding.UTF8, "application/json");
 
-                    var response = await httpClient.PutAsync("https://c2mwgtg0k0.execute-api.us-east-1.amazonaws.com/pirani-aml-stage/aml-api/entity/clients", content);
+                    var response = await httpClient.PutAsync(_putEndpoint, content);
 
                     response.EnsureSuccessStatusCode();
                     var responseContent = await response.Content.ReadAsStringAsync();

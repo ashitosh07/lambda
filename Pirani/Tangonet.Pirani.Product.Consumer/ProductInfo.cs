@@ -19,7 +19,7 @@ namespace Tangonet_Pirani_Product_Consumer
             public string ProductNumber { get; set; }
 
             [JsonPropertyName("registrationDate")]
-            public DateTime RegistrationDate { get; set; }
+            public string RegistrationDate { get; set; }
 
             [JsonPropertyName("city")]
             public string City { get; set; }
@@ -38,6 +38,12 @@ namespace Tangonet_Pirani_Product_Consumer
 
             [JsonPropertyName("parentType")]
             public string ParentType { get; set; }
+
+            [JsonPropertyName("openingAmount")]
+            public decimal OpeningAmount { get; set; }
+
+            [JsonPropertyName("currencyType")]
+            public string CurrencyType { get; set; }
 
         }
     }

@@ -3,10 +3,7 @@ using Amazon.DynamoDBv2.DocumentModel;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.KinesisEvents;
 using Newtonsoft.Json.Linq;
-using System;
-using System.Net.Http;
 using System.Text;
-using System.Threading.Tasks;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -16,13 +13,35 @@ namespace Tangonet_Pirani_Product_Consumer
     {
         private readonly IAmazonDynamoDB _dynamoDBClient;
         private readonly string _tableName;
+        private readonly string _apiKey;
+        private readonly string _apiValue;
+        private readonly string _postEndpoint;
+        private readonly string _putEndpoint;
 
         public Function()
         {
             _dynamoDBClient = new AmazonDynamoDBClient();
-            _tableName = "aml-product-data-capture-audits";
+            _tableName = GetConfigValue("DynamoDBTableName");
+            _apiKey = GetConfigValue("APIKey");
+            _apiValue = GetConfigValue("APIValue");
+            _postEndpoint = GetConfigValue("PostEndpoint");
+            _putEndpoint = GetConfigValue("PutEndpoint");
         }
 
+        private string GetConfigValue(string key)
+        {
+            try
+            {
+              
+                var jsonConfig = JObject.Parse(File.ReadAllText("aws-lambda-tools-defaults.json"));
+                return jsonConfig["Values"][key]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading configuration value for {key}: {ex.Message}");
+                return null;
+            }
+        }
         public async Task FunctionHandler(KinesisEvent kinesisEvent, ILambdaContext context)
         {
             if (kinesisEvent == null || kinesisEvent.Records == null)
@@ -55,7 +74,7 @@ namespace Tangonet_Pirani_Product_Consumer
 
                     if (operationType.ToString() == "insert" || operationType.ToString() == "update")
                     {
-                        var productInfo = MapProductInfo(fullDocument, id);
+                        var productInfo = MapProductInfo(fullDocument);
                         var json = Newtonsoft.Json.JsonConvert.SerializeObject(productInfo);
 
                         context.Logger.LogLine($"Mapped transaction data: {json}");
@@ -87,26 +106,31 @@ namespace Tangonet_Pirani_Product_Consumer
             }
         }
 
-        private ProductInfo MapProductInfo(JToken fullDocument, string id)
+        private ProductInfo MapProductInfo(JToken fullDocument)
         {
             var details = fullDocument["details"];
+            var sendAmounts = details["sendInfo"]["sendAmounts"];
+            var id = fullDocument["_id"].ToString();
+            var userId = fullDocument["userId"].ToString();
+            var product = "Remittance";
             var sendInfo = details["sendInfo"];
 
             return new ProductInfo
             {
-                IdentificationType = fullDocument["document_type"]?.ToString() ?? "Default",
+                IdentificationType = fullDocument["document_type"]?.ToString() ?? "Driving Licence",
                 IdentificationNumber = fullDocument["document_number"]?.ToString() ?? "Default",
-                ProductNumber = "prod-" + id,
-                Product = "Money Transfer",
-                Subproduct = sendInfo["send"]?.ToString() ?? "Default",
-                RegistrationDate = DateTime.Now,
+                Product = "Remittance",
+                Subproduct = sendInfo["send"]?.ToString() ?? "Send",
+                ProductNumber = "user-"+ (product == "Remittance" ? 1 : 2),
+                //RegistrationDate = DateTime.ParseExact(transactionDate, "yyyyMMddHHmmss", CultureInfo.InvariantCulture),
+                RegistrationDate = DateTime.Parse(DateTime.Now.ToString()).ToString("yyyy-MM-ddTHH:mm:ss"),
                 City = "New York City",
-                BranchOffice = "Center",
+                BranchOffice = "West",
                 DistributionChannel = "ATM",
-              //  CurrencyType = "Dolar",
-               // OpeningAmount = "default",
+                CurrencyType = sendAmounts["sendCurrency"].ToString() ?? "Default",
+                OpeningAmount = 0,
                 ProductState = "1",
-                ParentType = "COUNTERPARTIES",
+                ParentType = "CLIENTS",
             };
 
         }
@@ -134,7 +158,6 @@ namespace Tangonet_Pirani_Product_Consumer
 
             foreach (var kvp in jsonObject)
             {
-                // Skip id and user_id since they are already added to the document
                 if (kvp.Key != "id" && kvp.Key != "user_id")
                 {
                     document[kvp.Key] = kvp.Value.ToString();
@@ -159,11 +182,11 @@ namespace Tangonet_Pirani_Product_Consumer
             {
                 using (var httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.Add("x-api-key", "PN.L6t5wbN6Mtj7.Z2n-5NzS2GkGqG9qwmKllwd-IC01u7kQRb5Flb_xAP9Nlwbl");
+                    httpClient.DefaultRequestHeaders.Add(_apiKey, _apiValue);
 
                     var content = new StringContent(data, Encoding.UTF8, "application/json");
 
-                    var response = await httpClient.PostAsync("https://c2mwgtg0k0.execute-api.us-east-1.amazonaws.com/pirani-aml-stage/aml-api/entity/products", content);
+                    var response = await httpClient.PostAsync(_postEndpoint, content);
 
                     response.EnsureSuccessStatusCode();
                     var responseContent = await response.Content.ReadAsStringAsync();
@@ -183,11 +206,11 @@ namespace Tangonet_Pirani_Product_Consumer
             {
                 using (var httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.Add("x-api-key", "PN.L6t5wbN6Mtj7.Z2n-5NzS2GkGqG9qwmKllwd-IC01u7kQRb5Flb_xAP9Nlwbl");
+                    httpClient.DefaultRequestHeaders.Add(_apiKey, _apiValue);
 
                     var content = new StringContent(data, Encoding.UTF8, "application/json");
 
-                    var response = await httpClient.PutAsync("https://c2mwgtg0k0.execute-api.us-east-1.amazonaws.com/pirani-aml-stage/aml-api/entity/products", content);
+                    var response = await httpClient.PutAsync(_putEndpoint, content);
 
                     response.EnsureSuccessStatusCode();
                     var responseContent = await response.Content.ReadAsStringAsync();

@@ -6,6 +6,9 @@ namespace Tangonet_Pirani_Transaction_Consumer
     {
         public class TransactionInfo
         {
+            public string Id { get; set; }
+            public string UserId { get; set; }
+
             [JsonPropertyName("transactionCode")]
             public string TransactionCode { get; set; }
 
@@ -31,20 +34,55 @@ namespace Tangonet_Pirani_Transaction_Consumer
             public DateTime TransactionDate { get; set; }
 
             [JsonPropertyName("operationValue")]
-            public decimal OperationValue { get; set; }
-
-            [JsonPropertyName("cashValue")]
-            public decimal CashValue { get; set; }
-
-            [JsonPropertyName("checkValue")]
-            public decimal CheckValue { get; set; }
-
-            [JsonPropertyName("electronicChannelValue")]
-            public decimal ElectronicChannelValue { get; set; }
+            public string OperationValue { get; set; }
 
             [JsonPropertyName("currencyType")]
             public string CurrencyType { get; set; }
+
+
+
+
+            [JsonPropertyName("transactionType")]
+            public string TransactionType { get; set; }
+
+            [JsonPropertyName("TransactionFee")]
+            public string TransactionFee { get; set; }
+
+            [JsonPropertyName("terminalId")]
+            public string TerminalId { get; set; }
+
+            [JsonPropertyName("partnerId")]
+            public string PartnerId { get; set; }
+
+            [JsonPropertyName("transactionStatus")]
+            public string TransactionStatus { get; set; }
+
+            [JsonPropertyName("senderCurrency")]
+            public string SenderCurrency { get; set; }
+
+            [JsonPropertyName("senderFees")]
+            public string SenderFees { get; set; }
+
+            [JsonPropertyName("deliveryOption")]
+            public string DeliveryOption { get; set; }
+
+            [JsonPropertyName("deliveryCountry")]
+            public string DeliveryCountry { get; set; }
+
+            [JsonPropertyName("ReceiverFirstName")]
+            public string ReceiverFirstName { get; set; }
+
+            [JsonPropertyName("receiverLastName")]
+            public string ReceiverLastName { get; set; }
+
+            [JsonPropertyName("receiveCurrency")]
+            public string ReceiveCurrency { get; set; }
+
+            [JsonPropertyName("receiveAmount")]
+            public string ReceiveAmount { get; set; }
         }
+
+
     }
 
 
