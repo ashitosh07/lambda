@@ -1,6 +1,8 @@
 using Amazon.Kinesis;
 using Amazon.Kinesis.Model;
 using Amazon.Lambda.Core;
+using Newtonsoft.Json.Linq;
+using System.Text;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -9,12 +11,28 @@ namespace Tangonet_User_Producer;
 public class Function
 {
     private readonly IAmazonKinesis _kinesisClient;
+    private readonly string _streamName;
+    private readonly string _partitionKey;
 
     public Function()
     {
         _kinesisClient = new AmazonKinesisClient();
+        _streamName = GetConfigValue("StreamName");
+        _partitionKey = GetConfigValue("PartitionKey");
     }
-
+    private string GetConfigValue(string key)
+    {
+        try
+        {
+            var jsonConfig = JObject.Parse(File.ReadAllText("aws-lambda-tools-defaults.json"));
+            return jsonConfig["Values"][key]?.ToString();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading configuration value for {key}: {ex.Message}");
+            return null;
+        }
+    }
     public async Task FunctionHandler(Stream documentDbEvent, ILambdaContext context)
     {
         context.Logger.LogLine("STARTING THE FUNCTION");
@@ -40,9 +58,9 @@ public class Function
         {
             var putRecordRequest = new PutRecordRequest
             {
-                StreamName = "user-data-stream",
-                PartitionKey = "partitionKey",
-                Data = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(jsonData))
+                StreamName = _streamName,
+                PartitionKey = _partitionKey,
+                Data = new MemoryStream(Encoding.UTF8.GetBytes(jsonData))
             };
 
             var response = await _kinesisClient.PutRecordAsync(putRecordRequest);

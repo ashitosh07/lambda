@@ -1,57 +1,78 @@
 using Amazon.Kinesis;
 using Amazon.Kinesis.Model;
 using Amazon.Lambda.Core;
+using Newtonsoft.Json.Linq;
+using System.Text;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
-namespace Tangonet_Product_Producer;
-
-public class Function
+namespace Tangonet_Product_Producer
 {
-    private readonly IAmazonKinesis _kinesisClient;
-
-    public Function()
+    public class Function
     {
-        _kinesisClient = new AmazonKinesisClient();
-    }
+        private readonly IAmazonKinesis _kinesisClient;
+        private readonly string _streamName;
+        private readonly string _partitionKey;
 
-    public async Task FunctionHandler(Stream documentDbEvent, ILambdaContext context)
-    {
-        context.Logger.LogLine("STARTING THE FUNCTION");
-        try
+        public Function()
         {
-            using (var reader = new StreamReader(documentDbEvent))
-            {
-                var eventsArrayString = reader.ReadToEnd();
-                context.Logger.LogLine("STARTING THE EVENT ARRAYS");
+            _kinesisClient = new AmazonKinesisClient();
+            _streamName = GetConfigValue("StreamName");
+            _partitionKey = GetConfigValue("PartitionKey");
+        }
 
-                await PushDataToKinesis(eventsArrayString, context);
+        private string GetConfigValue(string key)
+        {
+            try
+            {
+                // Load aws-lambda-tools-defaults.json file
+                var jsonConfig = JObject.Parse(File.ReadAllText("aws-lambda-tools-defaults.json"));
+                return jsonConfig["Values"][key]?.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading configuration value for {key}: {ex.Message}");
+                return null;
             }
         }
-        catch (Exception ex)
-        {
-            context.Logger.LogLine($"An unexpected exception occurred: {ex}");
-        }
-    }
 
-    private async Task PushDataToKinesis(string jsonData, ILambdaContext context)
-    {
-        try
+        public async Task FunctionHandler(Stream documentDbEvent, ILambdaContext context)
         {
-            var putRecordRequest = new PutRecordRequest
+            context.Logger.LogLine("STARTING THE FUNCTION");
+            try
             {
-                StreamName = "product-data-stream",
-                PartitionKey = "partitionKey",
-                Data = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(jsonData))
-            };
+                using (var reader = new StreamReader(documentDbEvent))
+                {
+                    var eventsArrayString = reader.ReadToEnd();
+                    context.Logger.LogLine("STARTING THE EVENT ARRAYS");
 
-            var response = await _kinesisClient.PutRecordAsync(putRecordRequest);
-            context.Logger.LogLine($"Successfully put record into Kinesis. ShardId: {response}");
-            context.Logger.LogLine($"Successfully put record into Kinesis. ShardId: {response.ShardId}");
+                    await PushDataToKinesis(eventsArrayString, context);
+                }
+            }
+            catch (Exception ex)
+            {
+                context.Logger.LogLine($"An unexpected exception occurred: {ex}");
+            }
         }
-        catch (Exception ex)
+
+        private async Task PushDataToKinesis(string jsonData, ILambdaContext context)
         {
-            context.Logger.LogLine($"Failed to put record into Kinesis: {ex.Message}");
+            try
+            {
+                var putRecordRequest = new PutRecordRequest
+                {
+                    StreamName = _streamName,
+                    PartitionKey = _partitionKey,
+                    Data = new MemoryStream(Encoding.UTF8.GetBytes(jsonData))
+                };
+
+                var response = await _kinesisClient.PutRecordAsync(putRecordRequest);
+                context.Logger.LogLine($"Successfully put record into Kinesis. ShardId: {response.ShardId}");
+            }
+            catch (Exception ex)
+            {
+                context.Logger.LogLine($"Failed to put record into Kinesis: {ex.Message}");
+            }
         }
     }
 }

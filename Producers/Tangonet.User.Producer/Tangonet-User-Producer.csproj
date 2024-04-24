@@ -19,5 +19,6 @@
     <PackageReference Include="AWSSDK.S3" Version="3.7.307.19" />
     <PackageReference Include="MongoDB.Bson" Version="2.25.0" />
     <PackageReference Include="MongoDB.Driver" Version="2.25.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 </Project>
